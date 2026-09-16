@@ -52,6 +52,23 @@ class PitchExtractionTests(unittest.TestCase):
 
 
 class NoteSegmentationTests(unittest.TestCase):
+    def test_detect_onsets_finds_separated_synthesized_attacks(self):
+        sample_rate = 22_050
+        audio = np.zeros(sample_rate)
+        attack_times = np.array([0.2, 0.5, 0.8])
+        burst_samples = int(0.08 * sample_rate)
+        burst_time = np.arange(burst_samples) / sample_rate
+        burst = np.sin(2 * np.pi * 440.0 * burst_time) * np.exp(-35.0 * burst_time)
+        for attack_time in attack_times:
+            start = int(attack_time * sample_rate)
+            audio[start : start + burst_samples] += burst
+
+        onset_frames, _ = detect_onsets(audio, sr=sample_rate, hop=256)
+        detected_times = onset_frames * 256 / sample_rate
+
+        for attack_time in attack_times:
+            self.assertLess(np.min(np.abs(detected_times - attack_time)), 0.05)
+
     def test_detect_onsets_handles_silence_without_invalid_values(self):
         onset_frames, onset_envelope = detect_onsets(
             np.zeros(2_205), sr=22_050, hop=256
@@ -107,6 +124,59 @@ class NoteSegmentationTests(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0].confidence, 0.4)
         self.assertEqual(result[0].onset_strength, 0.2)
+
+    def test_short_pitch_artifact_across_rests_does_not_join_notes(self):
+        pitch = np.array(
+            [60] * 20 + [np.nan] * 20 + [61] * 5 + [np.nan] * 20 + [60] * 20
+        )
+        times = np.arange(len(pitch)) * 0.01
+
+        notes = frames_to_notes(
+            times,
+            pitch,
+            np.full(len(pitch), 0.9),
+            np.array([0]),
+            np.ones(len(pitch)),
+            hop_seconds=0.01,
+        )
+
+        self.assertEqual([note.midi for note in notes], [60, 60])
+        self.assertAlmostEqual(notes[0].start, 0.0)
+        self.assertAlmostEqual(notes[0].end, 0.2)
+        self.assertAlmostEqual(notes[1].start, 0.65)
+        self.assertAlmostEqual(notes[1].end, 0.85)
+
+    def test_raw_pitch_variation_reduces_stability_confidence(self):
+        pitch = np.full(20, 60.0)
+        times = np.arange(len(pitch)) * 0.01
+        probabilities = np.full(len(pitch), 0.8)
+        onsets = np.array([0])
+        onset_envelope = np.zeros(len(pitch))
+
+        stable = frames_to_notes(
+            times,
+            pitch,
+            probabilities,
+            onsets,
+            onset_envelope,
+            hop_seconds=0.01,
+            raw_midi=np.full(len(pitch), 60.0),
+        )
+        variable = frames_to_notes(
+            times,
+            pitch,
+            probabilities,
+            onsets,
+            onset_envelope,
+            hop_seconds=0.01,
+            raw_midi=np.tile([59.6, 60.4], len(pitch) // 2),
+        )
+
+        self.assertAlmostEqual(stable[0].confidence, 0.77)
+        self.assertAlmostEqual(
+            variable[0].confidence, 0.65 * 0.8 + 0.25 * (1.0 - 0.4 / 0.7)
+        )
+        self.assertGreater(stable[0].confidence - variable[0].confidence, 0.1)
 
     def test_validate_melody_rejects_fewer_than_twelve_notes(self):
         notes = [NoteEvent(index, index + 1, 60, 0.9) for index in range(11)]

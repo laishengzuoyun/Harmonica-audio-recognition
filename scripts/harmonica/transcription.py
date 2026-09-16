@@ -180,12 +180,18 @@ def frames_to_notes(
     onset_frames: np.ndarray,
     onset_envelope: np.ndarray,
     hop_seconds: float,
+    raw_midi: np.ndarray | None = None,
 ) -> list[NoteEvent]:
     """Turn cleaned pitch frames into onset-aware note events."""
     frame_times = np.asarray(times, dtype=float).reshape(-1)
     pitches = np.asarray(pitch, dtype=float).reshape(-1)
     probabilities = np.asarray(voiced_prob, dtype=float).reshape(-1)
     envelope = np.asarray(onset_envelope, dtype=float).reshape(-1)
+    stability_pitch = (
+        pitches
+        if raw_midi is None
+        else np.asarray(raw_midi, dtype=float).reshape(-1)
+    )
     frame_count = min(len(frame_times), len(pitches), len(probabilities))
     if frame_count == 0:
         return []
@@ -218,13 +224,17 @@ def frames_to_notes(
         cuts.append(end)
 
         for piece_start, piece_end in zip(cuts, cuts[1:]):
-            piece_pitch = pitches[piece_start:piece_end]
+            piece_pitch = stability_pitch[piece_start:piece_end]
             piece_probability = probabilities[piece_start:piece_end]
             probability = float(np.nanmean(piece_probability))
             if not np.isfinite(probability):
                 probability = 0.0
-            pitch_std = float(np.nanstd(piece_pitch))
-            stability = max(0.0, 1.0 - pitch_std / 0.7)
+            finite_pitch = piece_pitch[np.isfinite(piece_pitch)]
+            stability = (
+                max(0.0, 1.0 - float(np.std(finite_pitch)) / 0.7)
+                if len(finite_pitch)
+                else 0.0
+            )
             onset_strength = (
                 float(normalized_onsets[piece_start])
                 if piece_start < len(normalized_onsets)
@@ -254,6 +264,7 @@ def clean_notes(
     notes: list[NoteEvent], min_duration: float = 0.075
 ) -> list[NoteEvent]:
     """Remove short artifacts, folding them into matching neighbours."""
+    adjacency_tolerance = 0.06
     cleaned = list(notes)
     while True:
         short_index = next(
@@ -267,6 +278,10 @@ def clean_notes(
         if (
             0 < index < len(cleaned) - 1
             and cleaned[index - 1].midi == cleaned[index + 1].midi
+            and abs(cleaned[index].start - cleaned[index - 1].end)
+            <= adjacency_tolerance
+            and abs(cleaned[index + 1].start - cleaned[index].end)
+            <= adjacency_tolerance
         ):
             previous, _, following = cleaned[index - 1 : index + 2]
             cleaned[index - 1 : index + 2] = [
@@ -308,6 +323,7 @@ def transcribe_vocals(
         onset_frames,
         onset_envelope,
         frames.hop_seconds,
+        raw_midi=frames.midi,
     )
     validate_melody(notes)
     return notes, frames
