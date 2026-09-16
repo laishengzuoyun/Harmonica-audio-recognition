@@ -66,7 +66,8 @@ def _score_transpose(pitches: Iterable[int], transpose: int) -> tuple[int, int, 
     states = [modifier_state(canonical_fingering(pitch)) for pitch in shifted if fingering_candidates(pitch)]
     state_changes = sum(a != b for a, b in zip(states, states[1:]))
     fingerings = [canonical_fingering(pitch) for pitch in shifted if fingering_candidates(pitch)]
-    modifiers = sum(_modifier_count(fingering) > 0 for fingering in fingerings)
+    # Comma is a playable key, not a mouse modifier, so it has no operation cost.
+    modifiers = sum(fingering.shift != 0 or fingering.sharp for fingering in fingerings)
     sharps = sum(fingering.sharp for fingering in fingerings)
     return (out_of_range, state_changes, modifiers, sharps, abs(transpose), transpose)
 
@@ -79,4 +80,3 @@ def choose_transpose(notes: Iterable[NoteEvent]) -> int:
     if _score_transpose(pitches, best)[0]:
         raise InstrumentRangeError("旋律跨度过宽，无法移入口琴音域（C3–C#6）")
     return best
-

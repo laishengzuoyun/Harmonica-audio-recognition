@@ -37,6 +37,10 @@ class InstrumentTests(unittest.TestCase):
         notes = [NoteEvent(0, 1, p, 1.0) for p in (55, 57, 59, 60)]
         self.assertEqual(choose_transpose(notes), 5)
 
+    def test_choose_transpose_keeps_plain_comma_at_zero(self):
+        notes = [NoteEvent(0, 1, 72, 0.9)]
+        self.assertEqual(choose_transpose(notes), 0)
+
     def test_choose_transpose_rejects_melody_too_wide(self):
         notes = [NoteEvent(0, 1, 40, 1.0), NoteEvent(1, 2, 90, 1.0)]
         with self.assertRaises(InstrumentRangeError):
