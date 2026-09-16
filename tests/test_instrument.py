@@ -46,6 +46,22 @@ class InstrumentTests(unittest.TestCase):
         with self.assertRaises(InstrumentRangeError):
             choose_transpose(notes)
 
+    def test_choose_transpose_prioritizes_mouse_changes_over_modifier_count(self):
+        notes = [NoteEvent(i, i + 1, p, 1.0) for i, p in enumerate((72, 48, 71, 78, 65))]
+        self.assertEqual(choose_transpose(notes), 4)
+
+    def test_choose_transpose_prioritizes_sharps_over_transpose_distance(self):
+        notes = [NoteEvent(i, i + 1, p, 1.0) for i, p in enumerate((48, 61))]
+        self.assertEqual(choose_transpose(notes), 4)
+
+    def test_choose_transpose_rejects_empty_notes(self):
+        with self.assertRaises(InstrumentRangeError):
+            choose_transpose([])
+
+    def test_canonical_fingering_rejects_above_range(self):
+        with self.assertRaisesRegex(InstrumentRangeError, "C3.*C#6"):
+            canonical_fingering(86)
+
 
 if __name__ == "__main__":
     unittest.main()
