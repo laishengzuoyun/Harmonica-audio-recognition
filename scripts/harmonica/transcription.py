@@ -268,18 +268,15 @@ def clean_notes(
             0 < index < len(cleaned) - 1
             and cleaned[index - 1].midi == cleaned[index + 1].midi
         ):
-            previous, artifact, following = cleaned[index - 1 : index + 2]
+            previous, _, following = cleaned[index - 1 : index + 2]
             cleaned[index - 1 : index + 2] = [
                 NoteEvent(
                     start=previous.start,
                     end=following.end,
                     midi=previous.midi,
-                    confidence=max(
-                        previous.confidence, artifact.confidence, following.confidence
-                    ),
+                    confidence=max(previous.confidence, following.confidence),
                     onset_strength=max(
                         previous.onset_strength,
-                        artifact.onset_strength,
                         following.onset_strength,
                     ),
                 )

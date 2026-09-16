@@ -4,6 +4,7 @@ import numpy as np
 
 from scripts.harmonica.transcription import (
     bridge_tiny_gaps,
+    clean_notes,
     detect_onsets,
     extract_pitch_frames,
     frames_to_notes,
@@ -93,6 +94,19 @@ class NoteSegmentationTests(unittest.TestCase):
         )
 
         self.assertEqual([note.midi for note in notes], [60])
+
+    def test_short_pitch_flip_does_not_promote_discarded_scores(self):
+        notes = [
+            NoteEvent(0.0, 0.2, 60, 0.3, 0.2),
+            NoteEvent(0.2, 0.25, 61, 1.0, 1.0),
+            NoteEvent(0.25, 0.45, 60, 0.4, 0.1),
+        ]
+
+        result = clean_notes(notes)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].confidence, 0.4)
+        self.assertEqual(result[0].onset_strength, 0.2)
 
     def test_validate_melody_rejects_fewer_than_twelve_notes(self):
         notes = [NoteEvent(index, index + 1, 60, 0.9) for index in range(11)]
