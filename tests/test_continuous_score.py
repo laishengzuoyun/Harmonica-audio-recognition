@@ -42,6 +42,8 @@ class ContinuousTokenTests(unittest.TestCase):
 class ContinuousDocumentTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        if not MIDI_PATH.exists():
+            raise unittest.SkipTest("local Sunny Day reference MIDI is not available")
         cls.notes = score.extract_track_notes(MIDI_PATH, "Lead")
         cls.document = score.continuous_markdown(cls.notes)
 
