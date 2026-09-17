@@ -48,6 +48,7 @@ def separate_audio(source: Path, work_root: Path) -> tuple[Path, Path]:
         "-n",
         "htdemucs",
         "--two-stems=vocals",
+        "--shifts=0",
         "-o",
         str(work_root),
         str(source),

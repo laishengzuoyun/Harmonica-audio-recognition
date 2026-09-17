@@ -89,6 +89,7 @@ class SeparationTests(unittest.TestCase):
                     "-n",
                     "htdemucs",
                     "--two-stems=vocals",
+                    "--shifts=0",
                     "-o",
                     str(work_root),
                     str(source),
