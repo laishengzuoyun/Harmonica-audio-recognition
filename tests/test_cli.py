@@ -384,10 +384,12 @@ class BatchLauncherTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             launcher = root / "launcher.bat"
+            launcher_data = BATCH_LAUNCHER.read_bytes()
+            self.assertEqual(launcher_data.count(b'start "" explorer.exe "!SCRIPT_DIR!output"'), 1)
             launcher.write_bytes(
-                BATCH_LAUNCHER.read_bytes().replace(
-                    b'start "" explorer.exe "%~dp0output"',
-                    b'rem start "" explorer.exe "%~dp0output"',
+                launcher_data.replace(
+                    b'start "" explorer.exe "!SCRIPT_DIR!output"',
+                    b'rem start "" explorer.exe "!SCRIPT_DIR!output"',
                 )
             )
             python_path = root / ".tools" / "audio-venv" / "Scripts" / "python.exe"
@@ -413,10 +415,12 @@ class BatchLauncherTests(unittest.TestCase):
             root = Path(temporary_directory) / "project & !name!"
             root.mkdir()
             launcher = root / "launcher.bat"
+            launcher_data = BATCH_LAUNCHER.read_bytes()
+            self.assertEqual(launcher_data.count(b'start "" explorer.exe "!SCRIPT_DIR!output"'), 1)
             launcher.write_bytes(
-                BATCH_LAUNCHER.read_bytes().replace(
-                    b'start "" explorer.exe "%~dp0output"',
-                    b'rem start "" explorer.exe "%~dp0output"',
+                launcher_data.replace(
+                    b'start "" explorer.exe "!SCRIPT_DIR!output"',
+                    b'rem start "" explorer.exe "!SCRIPT_DIR!output"',
                 )
             )
             python_path = root / ".tools" / "audio-venv" / "Scripts" / "python.exe"
@@ -431,10 +435,11 @@ class BatchLauncherTests(unittest.TestCase):
                 "Path(__file__).parents[1].joinpath('args.txt').write_text('\\n'.join(sys.argv[1:]), encoding='utf-8')\n",
                 encoding="utf-8",
             )
-            source = Path(temporary_directory) / "input.mp3"
+            source = Path(temporary_directory) / "input!probe!.mp3"
             source.write_bytes(b"audio")
             marker = root / "INJECTED"
-            command = f"launcher.bat {source} < nul"
+            source_for_cmd = str(source).replace("!", "^^^!")
+            command = f"launcher.bat {source_for_cmd} < nul"
             completed = subprocess.run(
                 ["cmd", "/d", "/v:on", "/c", command],
                 cwd=root,
@@ -442,6 +447,7 @@ class BatchLauncherTests(unittest.TestCase):
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                env={**__import__("os").environ, "probe": "EXPANDED"},
             )
             self.assertEqual(completed.returncode, 0)
             self.assertFalse(marker.exists())

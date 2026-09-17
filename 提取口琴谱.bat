@@ -29,9 +29,11 @@ if errorlevel 1 goto dependency_error
 
 :run_cli
 echo 正在提取口琴谱。Demucs 首次运行可能需要联网下载模型，请耐心等待。
-"!VENV_PY!" "!SCRIPT_DIR!scripts\extract_harmonica_score.py" "%~1" --output "!SCRIPT_DIR!output" --keep-stems
-set "CLI_CODE=!ERRORLEVEL!"
-if not "!CLI_CODE!"=="0" goto cli_error
+setlocal DisableDelayedExpansion
+"%VENV_PY%" "%SCRIPT_DIR%scripts\extract_harmonica_score.py" "%INPUT%" --output "%SCRIPT_DIR%output" --keep-stems
+set "CLI_CODE=%ERRORLEVEL%"
+endlocal & set "CLI_CODE=%CLI_CODE%"
+if not "%CLI_CODE%"=="0" goto cli_error
 
 start "" explorer.exe "!SCRIPT_DIR!output"
 echo 提取完成，结果已保存到："!SCRIPT_DIR!output"
