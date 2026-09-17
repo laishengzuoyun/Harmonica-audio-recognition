@@ -1,6 +1,7 @@
 import contextlib
 import importlib.util
 import io
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -21,12 +22,13 @@ def load_cli():
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(module)
+    module._load_runtime_dependencies()
     return module
 
 
 def valid_notes():
     return [
-        NoteEvent(index * 0.5, index * 0.5 + 0.3, 60 + index % 3, 0.9)
+        NoteEvent(index * 0.75, index * 0.75 + 0.70, 60 + index % 3, 0.9)
         for index in range(12)
     ]
 
@@ -206,6 +208,33 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(len(backups), 1)
             self.assertEqual((backups[0] / "old.txt").read_bytes(), b"old")
 
+    @unittest.skipUnless(sys.platform == "win32", "Windows junction behavior only")
+    def test_publish_rejects_existing_windows_junction_before_any_mutation(self):
+        cli = load_cli()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            external = root / "external"
+            external.mkdir()
+            marker = external / "keep.txt"
+            marker.write_bytes(b"external")
+            final = root / "song"
+            created = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(final), str(external)],
+                capture_output=True,
+                text=True,
+            )
+            if created.returncode != 0:
+                self.skipTest("junction creation is unavailable on this Windows host")
+            result = root / "result"
+            result.mkdir()
+            (result / "new.txt").write_bytes(b"new")
+
+            with self.assertRaisesRegex(cli.InputValidationError, "链接|联接|junction"):
+                cli._publish(result, final, force=True)
+
+            self.assertEqual(marker.read_bytes(), b"external")
+            self.assertEqual((result / "new.txt").read_bytes(), b"new")
+
 
 class CommandLineTests(unittest.TestCase):
     def test_version_arguments_and_safe_titles(self):
@@ -220,6 +249,28 @@ class CommandLineTests(unittest.TestCase):
         self.assertTrue(args.force)
         self.assertEqual(cli.safe_title(Path(' a<>:"|?*.mp3 ')), "a_______")
         self.assertEqual(cli.safe_title(Path("...")), "未命名歌曲")
+        for reserved in ("NUL", "CON", "PRN", "AUX", "CLOCK$"):
+            self.assertEqual(cli.safe_title(Path(f".{reserved}.mp3")), f"_{reserved}")
+        for prefix in ("COM", "LPT"):
+            for number in range(1, 10):
+                self.assertEqual(
+                    cli.safe_title(Path(f" {prefix.lower()}{number} .mp3")),
+                    f"_{prefix}{number}",
+                )
+        self.assertEqual(cli.safe_title(Path("ordinary song.mp3")), "ordinary song")
+
+    def test_dependency_free_script_bootstrap_fails_cleanly_without_site_packages(self):
+        completed = subprocess.run(
+            [sys.executable, "-S", str(SCRIPT), "song.mp3"],
+            cwd=SCRIPT.parents[1],
+            capture_output=True,
+            text=True,
+        )
+
+        output = completed.stdout + completed.stderr
+        self.assertEqual(completed.returncode, 2)
+        self.assertNotIn("Traceback", output)
+        self.assertTrue("Python 3.12" in output or "依赖" in output)
 
     def test_main_returns_documented_codes_and_chinese_messages(self):
         cli = load_cli()

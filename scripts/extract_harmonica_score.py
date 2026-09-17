@@ -9,22 +9,72 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-import numpy as np
-
-
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from harmonica.audio import load_mono, separate_audio, validate_input
-from harmonica.instrument import choose_transpose
 from harmonica.models import HarmonicaError, InputValidationError
-from harmonica.render import render_all
-from harmonica.rhythm import detect_tempo_grid, quantize_notes, section_starts
-from harmonica.transcription import transcribe_vocals
 
 
 INVALID_TITLE_CHARACTERS = '<>:"/\\|?*'
+WINDOWS_RESERVED_TITLES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    "CLOCK$",
+    *(f"COM{number}" for number in range(1, 10)),
+    *(f"LPT{number}" for number in range(1, 10)),
+}
+
+_RUNTIME_LOADED = False
+np = None
+load_mono = None
+separate_audio = None
+validate_input = None
+choose_transpose = None
+render_all = None
+detect_tempo_grid = None
+quantize_notes = None
+section_starts = None
+transcribe_vocals = None
+
+
+def _load_runtime_dependencies() -> None:
+    """Load optional audio dependencies only when score extraction needs them."""
+    global _RUNTIME_LOADED
+    global np, load_mono, separate_audio, validate_input, choose_transpose
+    global render_all, detect_tempo_grid, quantize_notes, section_starts, transcribe_vocals
+    if _RUNTIME_LOADED:
+        return
+    try:
+        import numpy as runtime_numpy
+
+        from harmonica.audio import load_mono as runtime_load_mono
+        from harmonica.audio import separate_audio as runtime_separate_audio
+        from harmonica.audio import validate_input as runtime_validate_input
+        from harmonica.instrument import choose_transpose as runtime_choose_transpose
+        from harmonica.render import render_all as runtime_render_all
+        from harmonica.rhythm import detect_tempo_grid as runtime_detect_tempo_grid
+        from harmonica.rhythm import quantize_notes as runtime_quantize_notes
+        from harmonica.rhythm import section_starts as runtime_section_starts
+        from harmonica.transcription import transcribe_vocals as runtime_transcribe_vocals
+    except (ImportError, OSError) as error:
+        raise InputValidationError(
+            "缺少音频处理依赖或依赖无法加载，请安装 requirements-audio.txt 中的依赖。"
+        ) from error
+
+    np = runtime_numpy
+    load_mono = runtime_load_mono
+    separate_audio = runtime_separate_audio
+    validate_input = runtime_validate_input
+    choose_transpose = runtime_choose_transpose
+    render_all = runtime_render_all
+    detect_tempo_grid = runtime_detect_tempo_grid
+    quantize_notes = runtime_quantize_notes
+    section_starts = runtime_section_starts
+    transcribe_vocals = runtime_transcribe_vocals
+    _RUNTIME_LOADED = True
 
 
 def safe_title(path: Path) -> str:
@@ -33,7 +83,11 @@ def safe_title(path: Path) -> str:
     for character in INVALID_TITLE_CHARACTERS:
         title = title.replace(character, "_")
     title = title.strip(" .")
-    return title or "未命名歌曲"
+    if not title:
+        return "未命名歌曲"
+    if title.upper() in WINDOWS_RESERVED_TITLES:
+        return f"_{title.upper()}"
+    return title
 
 
 def validate_python_version(version: tuple[int, int] | None = None) -> None:
@@ -49,6 +103,15 @@ def _is_inside(path: Path, parent: Path) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _is_link_like(path: Path) -> bool:
+    """Identify symbolic links and Windows directory junctions without following them."""
+    path = Path(path)
+    if path.is_symlink():
+        return True
+    is_junction = getattr(path, "is_junction", None)
+    return bool(is_junction and is_junction())
 
 
 def _remove_owned_path(path: Path, parent: Path) -> None:
@@ -78,8 +141,12 @@ def _publish(result: Path, final: Path, force: bool) -> Path:
     result = Path(result)
     final = Path(final)
     parent = final.parent
+    if _is_link_like(result):
+        raise InputValidationError(f"拒绝发布符号链接或目录联接结果：{result}")
     if not result.is_dir():
         raise InputValidationError(f"待发布结果目录不存在：{result}")
+    if final.exists() and _is_link_like(final):
+        raise InputValidationError(f"拒绝覆盖符号链接或目录联接输出：{final}")
     if final.exists() and not force:
         raise InputValidationError(f"输出目录已存在：{final}；如需覆盖请使用 --force。")
 
@@ -160,6 +227,7 @@ def run_pipeline(
     audio: Path, output: Path, keep_stems: bool = False, force: bool = False
 ) -> Path:
     """Extract, render, and transactionally publish one audio score."""
+    _load_runtime_dependencies()
     source = Path(audio)
     output_root = Path(output)
     title = safe_title(source)
@@ -228,6 +296,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
         validate_python_version(sys.version_info[:2])
+        _load_runtime_dependencies()
         final = run_pipeline(args.audio, args.output, args.keep_stems, args.force)
     except HarmonicaError as error:
         print(f"错误：{error}")
