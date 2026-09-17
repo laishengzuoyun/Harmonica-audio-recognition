@@ -71,15 +71,23 @@ class MarkdownRenderTests(unittest.TestCase):
     def test_markdown_preserves_two_section_starts_in_the_same_bar(self):
         same_bar_notes = [
             QuantizedNote(0.0, 0.2, 55, 55, 0.9, 1, 1, 1),
-            QuantizedNote(0.5, 0.7, 60, 60, 0.8, 1, 5, 1),
+            QuantizedNote(0.5, 0.7, 72, 72, 0.8, 1, 5, 1),
         ]
 
-        for rendered in (
-            continuous_markdown("测试歌", same_bar_notes, [0, 1]),
-            detailed_markdown("测试歌", same_bar_notes, [0, 1]),
-        ):
+        continuous = continuous_markdown("测试歌", same_bar_notes, [0, 1])
+        detailed = detailed_markdown("测试歌", same_bar_notes, [0, 1])
+        for rendered in (continuous, detailed):
             self.assertEqual(rendered.count("第 1 段（00:00.0）"), 1)
             self.assertEqual(rendered.count("第 2 段（00:00.5）"), 1)
+            positions = [
+                rendered.index("第 1 段（00:00.0）"),
+                rendered.index("5(左)"),
+                rendered.index("第 2 段（00:00.5）"),
+                rendered.index("1(,)"),
+            ]
+            self.assertEqual(positions, sorted(positions))
+        self.assertIn("01.01–04", detailed)
+        self.assertIn("01.05–16", detailed)
 
 
 class MetadataAndCsvTests(unittest.TestCase):
@@ -152,6 +160,19 @@ class MetadataAndCsvTests(unittest.TestCase):
             self.assertEqual(reports[1]["filtered_note_count"], 0)
             self.assertEqual(reports[1]["warnings"], ["需复核"])
             self.assertTrue(reports[1]["custom"])
+
+    def test_analysis_cannot_override_authoritative_report_fields(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "reserved"):
+                render_all(
+                    "测试歌",
+                    NOTES,
+                    GRID,
+                    0,
+                    Path(directory),
+                    [0],
+                    {"note_count": 999, "bpm": 1, "wav_seconds": 0},
+                )
 
 
 class MediaRenderTests(unittest.TestCase):

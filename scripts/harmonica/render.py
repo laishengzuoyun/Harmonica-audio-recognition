@@ -84,10 +84,11 @@ def detailed_markdown(
         for position in range(onset + 1, onset + note.duration_slots):
             cells.setdefault(position, "—")
 
-    sections_at_bar: dict[int, list[tuple[int, float]]] = {}
+    sections_at_bar: dict[int, list[tuple[int, int, float]]] = {}
     for number, index in enumerate(sections, 1):
-        sections_at_bar.setdefault(notes[index].bar, []).append(
-            (number, notes[index].start)
+        section_note = notes[index]
+        sections_at_bar.setdefault(section_note.bar, []).append(
+            (section_note.slot - 1, number, section_note.start)
         )
     final_position = max(cells)
     final_bar = final_position // 16 + 1
@@ -98,16 +99,39 @@ def detailed_markdown(
         "",
     ]
     for bar in range(1, final_bar + 1):
-        for section_number, timestamp in sections_at_bar.get(bar, []):
-            lines.append(
-                f"## 第 {section_number} 段（{_format_time(timestamp)}）"
-            )
-            lines.append("")
         bar_start = (bar - 1) * 16
-        values = [cells.get(bar_start + offset, "·") for offset in range(16)]
-        beats = [" ".join(values[start : start + 4]) for start in range(0, 16, 4)]
-        lines.append(f"**第 {bar} 小节**  | " + " | ".join(beats) + " |")
-        lines.append("")
+        section_points = sections_at_bar.get(bar, [])
+        boundaries = [0]
+        boundaries.extend(
+            slot for slot in dict.fromkeys(point[0] for point in section_points) if slot
+        )
+        boundaries.append(16)
+        for slice_start, slice_end in zip(boundaries, boundaries[1:]):
+            for slot, section_number, timestamp in section_points:
+                if slot == slice_start:
+                    lines.append(
+                        f"## 第 {section_number} 段（{_format_time(timestamp)}）"
+                    )
+                    lines.append("")
+            values = [
+                cells.get(bar_start + offset, "·")
+                for offset in range(slice_start, slice_end)
+            ]
+            beats: list[str] = []
+            value_offset = 0
+            position = slice_start
+            while position < slice_end:
+                beat_end = min(slice_end, (position // 4 + 1) * 4)
+                beat_length = beat_end - position
+                beats.append(" ".join(values[value_offset : value_offset + beat_length]))
+                position = beat_end
+                value_offset += beat_length
+            if slice_start == 0 and slice_end == 16:
+                label = f"第 {bar} 小节"
+            else:
+                label = f"{bar:02d}.{slice_start + 1:02d}–{slice_end:02d}"
+            lines.append(f"**{label}**  | " + " | ".join(beats) + " |")
+            lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -261,6 +285,25 @@ def render_all(
     if not math.isfinite(grid.bpm) or grid.bpm <= 0:
         raise HarmonicaError("BPM tempo 必须是正的有限数")
     _validate_sections(notes, sections)
+
+    authoritative_fields = {
+        "bpm",
+        "grid_source",
+        "grid_consistency",
+        "transpose",
+        "note_count",
+        "source_range",
+        "play_range",
+        "source_midi_range",
+        "play_midi_range",
+        "median_confidence",
+        "midi_seconds",
+        "wav_seconds",
+    }
+    collisions = authoritative_fields.intersection(analysis or {})
+    if collisions:
+        names = ", ".join(sorted(collisions))
+        raise ValueError(f"analysis contains reserved report fields: {names}")
 
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
