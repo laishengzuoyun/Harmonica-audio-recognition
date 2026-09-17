@@ -1,6 +1,7 @@
 import contextlib
 import importlib.util
 import io
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -317,6 +318,13 @@ class CommandLineTests(unittest.TestCase):
 
 
 class BatchLauncherTests(unittest.TestCase):
+    def test_launcher_is_bom_free_and_uses_crlf(self):
+        data = BATCH_LAUNCHER.read_bytes()
+        self.assertFalse(data.startswith(b"\xef\xbb\xbf"))
+        without_crlf = data.replace(b"\r\n", b"")
+        self.assertNotIn(b"\n", without_crlf)
+        self.assertNotIn(b"\r", without_crlf)
+
     def test_launcher_contains_drag_drop_bootstrap_and_safe_invocation(self):
         launcher = BATCH_LAUNCHER.read_text(encoding="utf-8")
         for expected in (
@@ -335,7 +343,7 @@ class BatchLauncherTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             launcher = root / "launcher.bat"
-            launcher.write_text(BATCH_LAUNCHER.read_text(encoding="utf-8"), encoding="utf-8")
+            shutil.copyfile(BATCH_LAUNCHER, launcher)
             completed = subprocess.run(
                 ["cmd", "/d", "/c", 'call launcher.bat < nul'],
                 cwd=root,
@@ -345,6 +353,7 @@ class BatchLauncherTests(unittest.TestCase):
                 errors="replace",
             )
             self.assertEqual(completed.returncode, 2)
+            self.assertIn("请将 MP3、WAV 或 FLAC 音频文件拖到本文件上运行", completed.stdout)
             self.assertFalse((root / ".tools").exists())
 
 
