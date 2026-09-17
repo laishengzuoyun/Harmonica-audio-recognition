@@ -15,6 +15,8 @@ from scripts.harmonica.render import (
     detailed_markdown,
     render_all,
     write_csv,
+    write_midi,
+    write_preview,
 )
 
 
@@ -33,8 +35,23 @@ class MarkdownRenderTests(unittest.TestCase):
 
             self.assertEqual(len(paths), 6)
             self.assertTrue(all(path.exists() for path in paths))
-            continuous = (Path(directory) / "连续按键谱.md").read_text(encoding="utf-8")
-            detailed = (Path(directory) / "详细节奏谱.md").read_text(encoding="utf-8")
+            self.assertEqual(
+                [path.name for path in paths],
+                [
+                    "测试歌-连续按键谱.md",
+                    "测试歌-详细节奏谱.md",
+                    "测试歌-音符明细.csv",
+                    "测试歌-主旋律.mid",
+                    "测试歌-口琴试听.wav",
+                    "测试歌-分析报告.json",
+                ],
+            )
+            continuous = (Path(directory) / "测试歌-连续按键谱.md").read_text(
+                encoding="utf-8"
+            )
+            detailed = (Path(directory) / "测试歌-详细节奏谱.md").read_text(
+                encoding="utf-8"
+            )
             self.assertIn("5(左)", continuous)
             self.assertIn("1(,)", continuous)
             self.assertIn("｜", continuous)
@@ -51,6 +68,19 @@ class MarkdownRenderTests(unittest.TestCase):
         for rendered in (continuous, detailed):
             self.assertIn("第 2 段（00:02.0）", rendered)
 
+    def test_markdown_preserves_two_section_starts_in_the_same_bar(self):
+        same_bar_notes = [
+            QuantizedNote(0.0, 0.2, 55, 55, 0.9, 1, 1, 1),
+            QuantizedNote(0.5, 0.7, 60, 60, 0.8, 1, 5, 1),
+        ]
+
+        for rendered in (
+            continuous_markdown("测试歌", same_bar_notes, [0, 1]),
+            detailed_markdown("测试歌", same_bar_notes, [0, 1]),
+        ):
+            self.assertEqual(rendered.count("第 1 段（00:00.0）"), 1)
+            self.assertEqual(rendered.count("第 2 段（00:00.5）"), 1)
+
 
 class MetadataAndCsvTests(unittest.TestCase):
     def test_report_preserves_analysis_and_describes_pitch_ranges(self):
@@ -63,12 +93,14 @@ class MetadataAndCsvTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             render_all("测试歌", NOTES, GRID, 12, Path(directory), [0, 2], analysis)
 
-            with (Path(directory) / "音符明细.csv").open(
+            with (Path(directory) / "测试歌-音符明细.csv").open(
                 encoding="utf-8-sig", newline=""
             ) as handle:
                 rows = list(csv.DictReader(handle))
             report = json.loads(
-                (Path(directory) / "分析报告.json").read_text(encoding="utf-8")
+                (Path(directory) / "测试歌-分析报告.json").read_text(
+                    encoding="utf-8"
+                )
             )
             self.assertEqual(len(rows), 3)
             self.assertEqual(report["note_count"], 3)
@@ -77,15 +109,15 @@ class MetadataAndCsvTests(unittest.TestCase):
             self.assertEqual(report["warnings"], ["低置信度"])
             self.assertEqual(report["detector"], "fixture")
             self.assertEqual(report["transpose"], 12)
-            self.assertEqual(report["source_range"], "G3–C5")
-            self.assertEqual(report["play_range"], "G3–C5")
+            self.assertEqual(report["source_range"], ["G3", "C5"])
+            self.assertEqual(report["play_range"], ["G3", "C5"])
             self.assertEqual(report["source_midi_range"], [55, 72])
             self.assertEqual(report["play_midi_range"], [55, 72])
 
     def test_csv_uses_bom_and_exact_canonical_game_inputs(self):
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "notes.csv"
-            write_csv(destination, NOTES)
+            write_csv(NOTES, destination)
 
             self.assertTrue(destination.read_bytes().startswith(b"\xef\xbb\xbf"))
             with destination.open(encoding="utf-8-sig", newline="") as handle:
@@ -106,7 +138,11 @@ class MetadataAndCsvTests(unittest.TestCase):
             )
 
             reports = [
-                json.loads((Path(root) / "分析报告.json").read_text(encoding="utf-8"))
+                json.loads(
+                    (Path(root) / "测试歌-分析报告.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
                 for root in (first, second)
             ]
             self.assertEqual(reports[0]["filtered_frame_count"], 0)
@@ -121,9 +157,10 @@ class MetadataAndCsvTests(unittest.TestCase):
 class MediaRenderTests(unittest.TestCase):
     def test_midi_and_pcm_preview_are_readable_aligned_and_non_silent(self):
         with tempfile.TemporaryDirectory() as directory:
-            render_all("测试歌", NOTES, GRID, 0, Path(directory), [0])
-            midi_path = Path(directory) / "主旋律.mid"
-            wav_path = Path(directory) / "口琴试听.wav"
+            midi_path = Path(directory) / "preview.mid"
+            wav_path = Path(directory) / "preview.wav"
+            midi_seconds = write_midi(NOTES, GRID, midi_path)
+            written_wav_seconds = write_preview(NOTES, GRID, wav_path)
 
             midi = mido.MidiFile(midi_path)
             note_ons = [
@@ -134,9 +171,11 @@ class MediaRenderTests(unittest.TestCase):
             ]
             audio, sample_rate = sf.read(wav_path)
             info = sf.info(wav_path)
-            wav_seconds = len(audio) / sample_rate
+            decoded_wav_seconds = len(audio) / sample_rate
             self.assertEqual(note_ons, [55, 60, 72])
-            self.assertLess(abs(midi.length - wav_seconds), 0.1)
+            self.assertLess(abs(midi.length - decoded_wav_seconds), 0.1)
+            self.assertEqual(midi_seconds, midi.length)
+            self.assertEqual(written_wav_seconds, decoded_wav_seconds)
             self.assertEqual(info.subtype, "PCM_16")
             self.assertTrue(all(math.isfinite(float(sample)) for sample in audio))
             self.assertGreater(float(np.max(np.abs(audio))), 0.01)

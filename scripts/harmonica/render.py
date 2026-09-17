@@ -84,8 +84,11 @@ def detailed_markdown(
         for position in range(onset + 1, onset + note.duration_slots):
             cells.setdefault(position, "—")
 
-    section_at_bar = {notes[index].bar: number for number, index in enumerate(sections, 1)}
-    section_time = {notes[index].bar: notes[index].start for index in sections}
+    sections_at_bar: dict[int, list[tuple[int, float]]] = {}
+    for number, index in enumerate(sections, 1):
+        sections_at_bar.setdefault(notes[index].bar, []).append(
+            (number, notes[index].start)
+        )
     final_position = max(cells)
     final_bar = final_position // 16 + 1
     lines = [
@@ -95,9 +98,9 @@ def detailed_markdown(
         "",
     ]
     for bar in range(1, final_bar + 1):
-        if bar in section_at_bar:
+        for section_number, timestamp in sections_at_bar.get(bar, []):
             lines.append(
-                f"## 第 {section_at_bar[bar]} 段（{_format_time(section_time[bar])}）"
+                f"## 第 {section_number} 段（{_format_time(timestamp)}）"
             )
             lines.append("")
         bar_start = (bar - 1) * 16
@@ -121,7 +124,7 @@ def _game_input(midi: int) -> str:
     return "+".join(controls)
 
 
-def write_csv(path: Path, notes: Sequence[QuantizedNote]) -> None:
+def write_csv(notes: Sequence[QuantizedNote], path: Path) -> None:
     """Write note details as an Excel-friendly UTF-8 CSV."""
     fields = (
         "start",
@@ -161,14 +164,18 @@ def _score_seconds(notes: Sequence[QuantizedNote], bpm: float) -> float:
     return final_slot * slot_seconds
 
 
-def write_midi(path: Path, notes: Sequence[QuantizedNote], bpm: float) -> float:
+def write_midi(
+    notes: Sequence[QuantizedNote], grid: TempoGrid, path: Path
+) -> float:
     """Write a tempo-aware harmonica MIDI and return its decoded duration."""
     ticks_per_beat = 480
     ticks_per_slot = ticks_per_beat // 4
     midi = mido.MidiFile(type=1, ticks_per_beat=ticks_per_beat)
     track = mido.MidiTrack()
     midi.tracks.append(track)
-    track.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(bpm), time=0))
+    track.append(
+        mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(grid.bpm), time=0)
+    )
     track.append(mido.Message("program_change", program=22, time=0))
 
     events: list[tuple[int, int, int, mido.Message]] = []
@@ -193,16 +200,16 @@ def write_midi(path: Path, notes: Sequence[QuantizedNote], bpm: float) -> float:
 
 
 def write_preview(
-    path: Path,
     notes: Sequence[QuantizedNote],
-    bpm: float,
-    sample_rate: int = 44_100,
+    grid: TempoGrid,
+    path: Path,
+    sample_rate: int = 22_050,
 ) -> float:
     """Synthesize a deterministic, lightweight harmonica-like PCM preview."""
-    total_seconds = _score_seconds(notes, bpm)
+    total_seconds = _score_seconds(notes, grid.bpm)
     frame_count = max(1, round(total_seconds * sample_rate))
     waveform = np.zeros(frame_count, dtype=np.float64)
-    slot_seconds = 60.0 / float(bpm) / 4.0
+    slot_seconds = 60.0 / float(grid.bpm) / 4.0
     random = np.random.default_rng(20_260_916)
 
     for note in notes:
@@ -258,18 +265,18 @@ def render_all(
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     paths = [
-        output / "连续按键谱.md",
-        output / "详细节奏谱.md",
-        output / "音符明细.csv",
-        output / "主旋律.mid",
-        output / "口琴试听.wav",
-        output / "分析报告.json",
+        output / f"{title}-连续按键谱.md",
+        output / f"{title}-详细节奏谱.md",
+        output / f"{title}-音符明细.csv",
+        output / f"{title}-主旋律.mid",
+        output / f"{title}-口琴试听.wav",
+        output / f"{title}-分析报告.json",
     ]
     paths[0].write_text(continuous_markdown(title, notes, sections), encoding="utf-8")
     paths[1].write_text(detailed_markdown(title, notes, sections), encoding="utf-8")
-    write_csv(paths[2], notes)
-    midi_seconds = write_midi(paths[3], notes, grid.bpm)
-    wav_seconds = write_preview(paths[4], notes, grid.bpm)
+    write_csv(notes, paths[2])
+    midi_seconds = write_midi(notes, grid, paths[3])
+    wav_seconds = write_preview(notes, grid, paths[4])
 
     source_pitches = [note.source_midi for note in notes]
     play_pitches = [note.play_midi for note in notes]
@@ -279,8 +286,11 @@ def render_all(
         "grid_consistency": grid.consistency,
         "transpose": transpose,
         "note_count": len(notes),
-        "source_range": f"{note_name(min(source_pitches))}–{note_name(max(source_pitches))}",
-        "play_range": f"{note_name(min(play_pitches))}–{note_name(max(play_pitches))}",
+        "source_range": [
+            note_name(min(source_pitches)),
+            note_name(max(source_pitches)),
+        ],
+        "play_range": [note_name(min(play_pitches)), note_name(max(play_pitches))],
         "source_midi_range": [min(source_pitches), max(source_pitches)],
         "play_midi_range": [min(play_pitches), max(play_pitches)],
         "median_confidence": float(np.median([note.confidence for note in notes])),
