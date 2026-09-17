@@ -37,8 +37,7 @@ def _synthetic_melody() -> np.ndarray:
         chunks.append(_phase_integrated_tone(midi, 0.75))
         if index == 2:
             chunks.append(_phase_integrated_glide(60, 62, 0.060))
-        if index < len(EXPECTED_MIDI) - 1:
-            chunks.append(silence)
+        chunks.append(silence)
     return np.concatenate(chunks)
 
 
