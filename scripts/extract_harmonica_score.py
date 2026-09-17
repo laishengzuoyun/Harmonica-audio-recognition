@@ -178,7 +178,13 @@ def run_pipeline(
         result.mkdir()
 
         print("1/6 分离人声与伴奏…")
-        vocals, accompaniment = separate_audio(source, work_root)
+        separation_root = work_root / "separation"
+        expected_stem_dir = separation_root / "htdemucs" / source.stem
+        stems = (
+            expected_stem_dir / "vocals.wav",
+            expected_stem_dir / "no_vocals.wav",
+        )
+        vocals, accompaniment = separate_audio(source, separation_root)
         stems = (vocals, accompaniment)
         print("2/6 读取音频…")
         vocal_audio, vocal_rate = load_mono(vocals)

@@ -125,6 +125,31 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual((failures[0] / "stems" / "vocals.wav").read_bytes(), b"vocal")
             self.assertEqual((failures[0] / "stems" / "no_vocals.wav").read_bytes(), b"music")
 
+    def test_failure_keeps_vocal_created_before_separation_raises(self):
+        cli = load_cli()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source = root / "partial.mp3"
+            source.write_bytes(b"audio")
+            output = root / "output"
+
+            def partial_separation(_source, separation_root):
+                stem_dir = Path(separation_root) / "htdemucs" / source.stem
+                stem_dir.mkdir(parents=True)
+                (stem_dir / "vocals.wav").write_bytes(b"partial vocal")
+                raise RuntimeError("separation interrupted")
+
+            with patch.object(cli, "separate_audio", side_effect=partial_separation):
+                with self.assertRaisesRegex(RuntimeError, "separation interrupted"):
+                    cli.run_pipeline(source, output)
+
+            failures = list(output.glob("partial-失败-*"))
+            self.assertEqual(len(failures), 1)
+            self.assertEqual(
+                (failures[0] / "stems" / "vocals.wav").read_bytes(), b"partial vocal"
+            )
+            self.assertFalse((failures[0] / "stems" / "no_vocals.wav").exists())
+
     def test_force_replaces_old_output_and_rolls_back_if_publish_rename_fails(self):
         cli = load_cli()
         with tempfile.TemporaryDirectory() as temporary_directory:
