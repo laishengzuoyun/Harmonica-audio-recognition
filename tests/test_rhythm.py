@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -24,6 +25,29 @@ class TempoGridTests(unittest.TestCase):
         self.assertAlmostEqual(grid.bpm, 120.0, delta=3.0)
         self.assertEqual(grid.source, "beats")
 
+    def test_fits_long_beat_timestamps_without_cumulative_slot_drift(self):
+        sample_rate = 22_050
+        hop_length = 512
+        beat_frames = np.rint(
+            np.arange(120) * 0.5 * sample_rate / hop_length
+        ).astype(int)
+        beat_times = beat_frames * hop_length / sample_rate
+        notes = [
+            NoteEvent(float(beat_times[0]), float(beat_times[0] + 0.1), 60, 0.9),
+            NoteEvent(float(beat_times[-1]), float(beat_times[-1] + 0.1), 62, 0.9),
+        ]
+
+        with mock.patch(
+            "scripts.harmonica.rhythm.librosa.beat.beat_track",
+            return_value=(np.array([117.45]), beat_frames),
+        ):
+            grid = detect_tempo_grid(np.zeros(sample_rate), sample_rate, notes=[])
+
+        self.assertAlmostEqual(grid.bpm, 120.0, delta=0.1)
+        quantized = quantize_notes(notes, grid, 0)
+        positions = [(note.bar - 1) * 16 + note.slot for note in quantized]
+        self.assertEqual(positions[1] - positions[0], 4 * 119)
+
     def test_falls_back_to_note_intervals_when_accompaniment_has_no_beats(self):
         notes = [NoteEvent(i * 0.15, i * 0.15 + 0.1, 60, 0.9) for i in range(40)]
 
@@ -37,6 +61,26 @@ class TempoGridTests(unittest.TestCase):
             detect_tempo_grid(
                 np.zeros(22_050), 22_050, [NoteEvent(0.0, 0.2, 60, 0.9)]
             )
+
+    def test_interval_fallback_scores_global_onset_phase(self):
+        starts = np.cumsum([0.0] + [0.16, 0.31, 0.46, 0.61] * 10)
+        notes = [
+            NoteEvent(float(start), float(start + 0.1), 60, 0.9)
+            for start in starts
+        ]
+
+        with mock.patch(
+            "scripts.harmonica.rhythm.librosa.beat.beat_track",
+            return_value=(np.array([0.0]), np.array([], dtype=int)),
+        ):
+            grid = detect_tempo_grid(np.zeros(22_050), 22_050, notes)
+
+        positions = (starts - grid.anchor) / (60.0 / grid.bpm / 4.0)
+        phase_consistency = float(
+            np.mean(np.abs(positions - np.rint(positions)) <= 0.18)
+        )
+        self.assertGreaterEqual(phase_consistency, 0.55)
+        self.assertAlmostEqual(grid.consistency, phase_consistency)
 
 
 class QuantizationTests(unittest.TestCase):
@@ -68,6 +112,50 @@ class QuantizationTests(unittest.TestCase):
                 TempoGrid(0.0, 0.0, "beats", 1.0),
                 0,
             )
+
+    def test_keeps_adjacent_short_notes_monophonic_after_quantization(self):
+        notes = [
+            NoteEvent(0.0, 0.071, 60, 0.9),
+            NoteEvent(0.071, 0.142, 61, 0.9),
+            NoteEvent(0.142, 0.22, 62, 0.9),
+        ]
+
+        quantized = quantize_notes(notes, TempoGrid(120.0, 0.0, "beats", 1.0), 0)
+
+        starts = [(note.bar - 1) * 16 + note.slot - 1 for note in quantized]
+        self.assertEqual(starts, sorted(starts))
+        self.assertTrue(all(later > earlier for earlier, later in zip(starts, starts[1:])))
+        self.assertTrue(
+            all(
+                note.duration_slots <= next_start - start
+                for note, start, next_start in zip(quantized, starts, starts[1:])
+            )
+        )
+
+    def test_rejects_nonfinite_anchor_and_note_times(self):
+        valid_note = NoteEvent(0.0, 0.1, 60, 0.9)
+        with self.assertRaisesRegex(RhythmError, "anchor"):
+            quantize_notes([valid_note], TempoGrid(120.0, np.nan, "beats", 1.0), 0)
+        with self.assertRaisesRegex(RhythmError, "finite"):
+            quantize_notes(
+                [NoteEvent(np.nan, 0.1, 60, 0.9)],
+                TempoGrid(120.0, 0.0, "beats", 1.0),
+                0,
+            )
+
+    def test_rejects_nonchronological_or_backwards_notes(self):
+        grid = TempoGrid(120.0, 0.0, "beats", 1.0)
+        with self.assertRaisesRegex(RhythmError, "chronological"):
+            quantize_notes(
+                [
+                    NoteEvent(0.2, 0.3, 60, 0.9),
+                    NoteEvent(0.1, 0.2, 62, 0.9),
+                ],
+                grid,
+                0,
+            )
+        with self.assertRaisesRegex(RhythmError, "end"):
+            quantize_notes([NoteEvent(0.2, 0.1, 60, 0.9)], grid, 0)
 
 
 class SectionTests(unittest.TestCase):
