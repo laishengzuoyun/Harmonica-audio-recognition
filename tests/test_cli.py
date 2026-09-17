@@ -327,6 +327,8 @@ class BatchLauncherTests(unittest.TestCase):
 
     def test_launcher_contains_drag_drop_bootstrap_and_safe_invocation(self):
         launcher = BATCH_LAUNCHER.read_text(encoding="utf-8")
+        self.assertIn("setlocal DisableDelayedExpansion", launcher)
+        self.assertIn('echo 提取完成，结果已保存到："!SCRIPT_DIR!output"', launcher)
         for expected in (
             '"%~1"',
             "--keep-stems",
@@ -355,6 +357,99 @@ class BatchLauncherTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 2)
             self.assertIn("请将 MP3、WAV 或 FLAC 音频文件拖到本文件上运行", completed.stdout)
             self.assertFalse((root / ".tools").exists())
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows launcher behavior only")
+    def test_launcher_dependency_failure_returns_four_without_marker(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            shutil.copyfile(BATCH_LAUNCHER, root / "launcher.bat")
+            python_path = root / ".tools" / "audio-venv" / "Scripts" / "python.exe"
+            python_path.parent.mkdir(parents=True)
+            shutil.copyfile(sys.executable, python_path)
+            (root / "sitecustomize.py").write_text("raise SystemExit(1)\n", encoding="utf-8")
+            completed = subprocess.run(
+                ["cmd", "/d", "/c", "launcher.bat song.mp3 < nul"],
+                cwd=root,
+                env={**__import__("os").environ, "PYTHONPATH": str(root)},
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            self.assertEqual(completed.returncode, 4)
+            self.assertFalse((root / ".tools" / "audio-venv" / ".audio-deps-ready").exists())
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows launcher behavior only")
+    def test_launcher_preserves_cli_failure_code_without_explorer(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            launcher = root / "launcher.bat"
+            launcher.write_bytes(
+                BATCH_LAUNCHER.read_bytes().replace(
+                    b'start "" explorer.exe "%~dp0output"',
+                    b'rem start "" explorer.exe "%~dp0output"',
+                )
+            )
+            python_path = root / ".tools" / "audio-venv" / "Scripts" / "python.exe"
+            python_path.parent.mkdir(parents=True)
+            shutil.copyfile(sys.executable, python_path)
+            (python_path.parent.parent / ".audio-deps-ready").write_bytes(b"ready\r\n")
+            script = root / "scripts" / "extract_harmonica_score.py"
+            script.parent.mkdir()
+            script.write_text("raise SystemExit(7)\n", encoding="utf-8")
+            completed = subprocess.run(
+                ["cmd", "/d", "/c", "launcher.bat song.mp3 < nul"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            self.assertEqual(completed.returncode, 7)
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows launcher behavior only")
+    def test_launcher_quotes_completion_path_and_preserves_cli_arguments(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory) / "project & !name!"
+            root.mkdir()
+            launcher = root / "launcher.bat"
+            launcher.write_bytes(
+                BATCH_LAUNCHER.read_bytes().replace(
+                    b'start "" explorer.exe "%~dp0output"',
+                    b'rem start "" explorer.exe "%~dp0output"',
+                )
+            )
+            python_path = root / ".tools" / "audio-venv" / "Scripts" / "python.exe"
+            python_path.parent.mkdir(parents=True)
+            shutil.copyfile(sys.executable, python_path)
+            (python_path.parent.parent / ".audio-deps-ready").write_bytes(b"ready\r\n")
+            script = root / "scripts" / "extract_harmonica_score.py"
+            script.parent.mkdir()
+            script.write_text(
+                "from pathlib import Path\n"
+                "import sys\n"
+                "Path(__file__).parents[1].joinpath('args.txt').write_text('\\n'.join(sys.argv[1:]), encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+            source = Path(temporary_directory) / "input.mp3"
+            source.write_bytes(b"audio")
+            marker = root / "INJECTED"
+            command = f"launcher.bat {source} < nul"
+            completed = subprocess.run(
+                ["cmd", "/d", "/v:on", "/c", command],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            self.assertEqual(completed.returncode, 0)
+            self.assertFalse(marker.exists())
+            self.assertEqual(
+                (root / "args.txt").read_text(encoding="utf-8").splitlines(),
+                [str(source), "--output", str(root / "output"), "--keep-stems"],
+            )
+            self.assertIn(f'"{root / "output"}"', completed.stdout)
 
 
 if __name__ == "__main__":
