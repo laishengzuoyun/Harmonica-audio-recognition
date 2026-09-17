@@ -50,6 +50,23 @@ class PitchExtractionTests(unittest.TestCase):
         self.assertGreater(len(finite_pitch), 20)
         self.assertAlmostEqual(float(np.median(finite_pitch)), 69.0, delta=0.5)
 
+    def test_sustained_tone_keeps_at_least_seven_tenths_voiced(self):
+        sample_rate = 22_050
+        sample_count = round(0.75 * sample_rate)
+        time = np.arange(sample_count) / sample_rate
+        frequency = 440.0 * 2.0 ** ((60.0 - 69.0) / 12.0)
+        phase = 2.0 * np.pi * np.cumsum(np.full(sample_count, frequency)) / sample_rate
+        attack = np.minimum(time / 0.012, 1.0)
+        audio = 0.35 * attack * np.sin(phase)
+
+        frames = extract_pitch_frames(audio, sample_rate)
+        voiced = np.flatnonzero(np.isfinite(frames.pitch))
+        voiced_duration = (
+            frames.times[voiced[-1]] - frames.times[voiced[0]] + frames.hop_seconds
+        )
+
+        self.assertGreaterEqual(voiced_duration, 0.70)
+
 
 class NoteSegmentationTests(unittest.TestCase):
     def test_detect_onsets_finds_separated_synthesized_attacks(self):

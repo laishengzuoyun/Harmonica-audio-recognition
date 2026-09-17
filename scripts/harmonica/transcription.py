@@ -86,7 +86,7 @@ def extract_pitch_frames(
     rms_db = librosa.amplitude_to_db(rms, ref=reference)
     finite_energy = rms_db[np.isfinite(rms_db)]
     energy_floor = (
-        max(-48.0, float(np.quantile(finite_energy, 0.2)))
+        min(-6.0, max(-48.0, float(np.quantile(finite_energy, 0.2))))
         if len(finite_energy)
         else -48.0
     )
