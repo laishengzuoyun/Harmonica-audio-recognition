@@ -15,6 +15,7 @@ from scripts.harmonica.models import NoteEvent, TempoGrid
 
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "extract_harmonica_score.py"
+BATCH_LAUNCHER = Path(__file__).parents[1] / "提取口琴谱.bat"
 
 
 def load_cli():
@@ -313,6 +314,38 @@ class CommandLineTests(unittest.TestCase):
 
         pipeline.assert_not_called()
         self.assertIn("Python 3.12", stdout.getvalue())
+
+
+class BatchLauncherTests(unittest.TestCase):
+    def test_launcher_contains_drag_drop_bootstrap_and_safe_invocation(self):
+        launcher = BATCH_LAUNCHER.read_text(encoding="utf-8")
+        for expected in (
+            '"%~1"',
+            "--keep-stems",
+            "requirements-audio.txt",
+            "py -3.12",
+            ".audio-deps-ready",
+            r".tools\audio-venv",
+        ):
+            self.assertIn(expected, launcher)
+        self.assertRegex(launcher, r'--output\s+"[^\"]+"')
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows launcher behavior only")
+    def test_launcher_without_argument_exits_before_install(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            launcher = root / "launcher.bat"
+            launcher.write_text(BATCH_LAUNCHER.read_text(encoding="utf-8"), encoding="utf-8")
+            completed = subprocess.run(
+                ["cmd", "/d", "/c", 'call launcher.bat < nul'],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            self.assertEqual(completed.returncode, 2)
+            self.assertFalse((root / ".tools").exists())
 
 
 if __name__ == "__main__":
