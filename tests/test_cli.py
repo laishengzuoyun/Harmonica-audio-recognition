@@ -347,7 +347,7 @@ class BatchLauncherTests(unittest.TestCase):
             launcher = root / "launcher.bat"
             shutil.copyfile(BATCH_LAUNCHER, launcher)
             completed = subprocess.run(
-                ["cmd", "/d", "/c", 'call launcher.bat < nul'],
+                ["cmd", "/d", "/c", 'launcher.bat < nul'],
                 cwd=root,
                 capture_output=True,
                 text=True,
@@ -365,7 +365,9 @@ class BatchLauncherTests(unittest.TestCase):
             shutil.copyfile(BATCH_LAUNCHER, root / "launcher.bat")
             python_path = root / ".tools" / "audio-venv" / "Scripts" / "python.exe"
             python_path.parent.mkdir(parents=True)
-            shutil.copyfile(sys.executable, python_path)
+            base_python = Path(sys._base_executable)
+            self.assertTrue(base_python.is_file())
+            shutil.copyfile(base_python, python_path)
             (root / "sitecustomize.py").write_text("raise SystemExit(1)\n", encoding="utf-8")
             completed = subprocess.run(
                 ["cmd", "/d", "/c", "launcher.bat song.mp3 < nul"],
@@ -378,6 +380,30 @@ class BatchLauncherTests(unittest.TestCase):
             )
             self.assertEqual(completed.returncode, 4)
             self.assertFalse((root / ".tools" / "audio-venv" / ".audio-deps-ready").exists())
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows launcher behavior only")
+    def test_launcher_venv_creation_failure_returns_three(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            shutil.copyfile(BATCH_LAUNCHER, root / "launcher.bat")
+            base_python = Path(sys._base_executable)
+            self.assertTrue(base_python.is_file())
+            shutil.copyfile(base_python, root / "py.exe")
+            completed = subprocess.run(
+                ["cmd", "/d", "/c", "launcher.bat song.mp3 < nul"],
+                cwd=root,
+                env={
+                    **__import__("os").environ,
+                    "PATH": f"{root};{__import__('os').environ['PATH']}",
+                    "PYTHONHOME": str(root / "missing-python-home"),
+                },
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            self.assertEqual(completed.returncode, 3)
+            self.assertFalse((root / ".tools").exists())
 
     @unittest.skipUnless(sys.platform == "win32", "Windows launcher behavior only")
     def test_launcher_preserves_cli_failure_code_without_explorer(self):
@@ -394,7 +420,9 @@ class BatchLauncherTests(unittest.TestCase):
             )
             python_path = root / ".tools" / "audio-venv" / "Scripts" / "python.exe"
             python_path.parent.mkdir(parents=True)
-            shutil.copyfile(sys.executable, python_path)
+            base_python = Path(sys._base_executable)
+            self.assertTrue(base_python.is_file())
+            shutil.copyfile(base_python, python_path)
             (python_path.parent.parent / ".audio-deps-ready").write_bytes(b"ready\r\n")
             script = root / "scripts" / "extract_harmonica_score.py"
             script.parent.mkdir()
@@ -425,7 +453,9 @@ class BatchLauncherTests(unittest.TestCase):
             )
             python_path = root / ".tools" / "audio-venv" / "Scripts" / "python.exe"
             python_path.parent.mkdir(parents=True)
-            shutil.copyfile(sys.executable, python_path)
+            base_python = Path(sys._base_executable)
+            self.assertTrue(base_python.is_file())
+            shutil.copyfile(base_python, python_path)
             (python_path.parent.parent / ".audio-deps-ready").write_bytes(b"ready\r\n")
             script = root / "scripts" / "extract_harmonica_score.py"
             script.parent.mkdir()
@@ -435,11 +465,17 @@ class BatchLauncherTests(unittest.TestCase):
                 "Path(__file__).parents[1].joinpath('args.txt').write_text('\\n'.join(sys.argv[1:]), encoding='utf-8')\n",
                 encoding="utf-8",
             )
-            source = Path(temporary_directory) / "input!probe!.mp3"
+            source = Path(temporary_directory) / "input file & (take)!probe!%.mp3"
             source.write_bytes(b"audio")
             marker = root / "INJECTED"
-            source_for_cmd = str(source).replace("!", "^^^!")
-            command = f"launcher.bat {source_for_cmd} < nul"
+            driver = root / "driver.bat"
+            driver.write_text(
+                "@echo off\r\n"
+                "setlocal DisableDelayedExpansion\r\n"
+                f"launcher.bat \"{str(source).replace('%', '%%')}\" < nul\r\n",
+                encoding="utf-8",
+            )
+            command = "driver.bat"
             completed = subprocess.run(
                 ["cmd", "/d", "/v:on", "/c", command],
                 cwd=root,

@@ -7,7 +7,7 @@ rem The dragged input is received as "%~1".
 setlocal EnableDelayedExpansion
 cd /d "!SCRIPT_DIR!"
 
-if "!INPUT!"=="" goto no_input
+if not defined INPUT goto no_input
 
 set "VENV_ROOT=!SCRIPT_DIR!.tools\audio-venv"
 set "VENV_PY=!VENV_ROOT!\Scripts\python.exe"
