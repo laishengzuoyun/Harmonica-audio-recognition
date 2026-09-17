@@ -95,12 +95,18 @@ def _publish(result: Path, final: Path, force: bool) -> Path:
         raise
 
     if backup is not None and backup.exists():
-        _remove_owned_path(backup, parent)
+        try:
+            _remove_owned_path(backup, parent)
+        except OSError as error:
+            print(f"警告：新结果已发布，但旧备份暂未清理：{error}")
     return final
 
 
 def _save_failure(
-    output_root: Path, title: str, work_root: Path | None, error: BaseException
+    output_root: Path,
+    title: str,
+    stems: tuple[Path, Path] | None,
+    error: BaseException,
 ) -> None:
     """Best-effort failure diagnostics that never replace the original exception."""
     try:
@@ -113,12 +119,18 @@ def _save_failure(
             f"口琴谱提取失败。\n\n{type(error).__name__}: {error}\n",
             encoding="utf-8",
         )
-        if work_root is None:
+        if stems is None:
             return
-        stem_dir = Path(work_root) / "htdemucs" / title
-        # Demucs names its directory after the input stem; callers pass the same title.
-        if stem_dir.is_dir() and _is_inside(stem_dir, Path(work_root)):
-            shutil.copytree(stem_dir, failure / "stems")
+        destination = failure / "stems"
+        copied = False
+        for source, filename in zip(stems, ("vocals.wav", "no_vocals.wav")):
+            source = Path(source)
+            if source.is_file():
+                destination.mkdir(exist_ok=True)
+                shutil.copy2(source, destination / filename)
+                copied = True
+        if not copied and destination.exists():
+            _remove_owned_path(destination, failure)
     except Exception:
         pass
 
@@ -157,6 +169,7 @@ def run_pipeline(
         raise InputValidationError(f"输出目录已存在：{final}；如需覆盖请使用 --force。")
 
     work_root: Path | None = None
+    stems: tuple[Path, Path] | None = None
     try:
         work_root = Path(
             tempfile.mkdtemp(prefix=f".{title}-处理中-", dir=output_root)
@@ -166,6 +179,7 @@ def run_pipeline(
 
         print("1/6 分离人声与伴奏…")
         vocals, accompaniment = separate_audio(source, work_root)
+        stems = (vocals, accompaniment)
         print("2/6 读取音频…")
         vocal_audio, vocal_rate = load_mono(vocals)
         accompaniment_audio, accompaniment_rate = load_mono(accompaniment)
@@ -181,12 +195,14 @@ def run_pipeline(
         print("6/6 生成乐谱文件…")
         render_all(title, quantized, grid, transpose, result, sections, analysis)
         if keep_stems:
-            shutil.copy2(vocals, result / "vocals.wav")
-            shutil.copy2(accompaniment, result / "no_vocals.wav")
+            stem_output = result / "stems"
+            stem_output.mkdir()
+            shutil.copy2(vocals, stem_output / "vocals.wav")
+            shutil.copy2(accompaniment, stem_output / "no_vocals.wav")
         published = _publish(result, final, force)
         return published
     except Exception as error:
-        _save_failure(output_root, title, work_root, error)
+        _save_failure(output_root, title, stems, error)
         raise
     finally:
         if work_root is not None and work_root.exists() and _is_inside(work_root, output_root):
@@ -205,6 +221,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
+        validate_python_version(sys.version_info[:2])
         final = run_pipeline(args.audio, args.output, args.keep_stems, args.force)
     except HarmonicaError as error:
         print(f"错误：{error}")

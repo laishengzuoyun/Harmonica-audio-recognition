@@ -70,8 +70,8 @@ class PipelineTests(unittest.TestCase):
 
             self.assertEqual(final, output / "歌曲")
             self.assertEqual((final / "rendered.txt").read_text(encoding="utf-8"), "ok")
-            self.assertEqual((final / "vocals.wav").read_bytes(), b"vocal")
-            self.assertEqual((final / "no_vocals.wav").read_bytes(), b"music")
+            self.assertEqual((final / "stems" / "vocals.wav").read_bytes(), b"vocal")
+            self.assertEqual((final / "stems" / "no_vocals.wav").read_bytes(), b"music")
             self.assertEqual(len(rendered["notes"]), 12)
             self.assertEqual(rendered["sections"], [0])
             self.assertEqual(rendered["analysis"]["filtered_frame_count"], 1)
@@ -97,15 +97,15 @@ class PipelineTests(unittest.TestCase):
         cli = load_cli()
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            source = root / "song.mp3"
+            source = root / " lead.mp3"
             source.write_bytes(b"audio")
             output = root / "output"
-            final = output / "song"
+            final = output / "lead"
             final.mkdir(parents=True)
             (final / "old.txt").write_bytes(b"unchanged")
 
             def completed_separation(_source, work_root):
-                stem_dir = Path(work_root) / "htdemucs" / "song"
+                stem_dir = Path(work_root) / "htdemucs" / source.stem
                 stem_dir.mkdir(parents=True)
                 (stem_dir / "vocals.wav").write_bytes(b"vocal")
                 (stem_dir / "no_vocals.wav").write_bytes(b"music")
@@ -119,10 +119,11 @@ class PipelineTests(unittest.TestCase):
                     cli.run_pipeline(source, output, force=True)
 
             self.assertEqual((final / "old.txt").read_bytes(), b"unchanged")
-            failures = list(output.glob("song-失败-*"))
+            failures = list(output.glob("lead-失败-*"))
             self.assertEqual(len(failures), 1)
             self.assertIn("external failed", (failures[0] / "错误日志.txt").read_text(encoding="utf-8"))
             self.assertEqual((failures[0] / "stems" / "vocals.wav").read_bytes(), b"vocal")
+            self.assertEqual((failures[0] / "stems" / "no_vocals.wav").read_bytes(), b"music")
 
     def test_force_replaces_old_output_and_rolls_back_if_publish_rename_fails(self):
         cli = load_cli()
@@ -155,6 +156,31 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual((final / "new.txt").read_bytes(), b"new")
             self.assertFalse((final / "half.txt").exists())
 
+    def test_publish_keeps_new_final_when_post_commit_backup_cleanup_fails(self):
+        cli = load_cli()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            final = root / "song"
+            final.mkdir()
+            (final / "old.txt").write_bytes(b"old")
+            result = root / "result"
+            result.mkdir()
+            (result / "new.txt").write_bytes(b"new")
+            real_rmtree = cli.shutil.rmtree
+
+            def fail_only_backup(path, *args, **kwargs):
+                if Path(path).name.startswith(".song-备份"):
+                    raise OSError("backup cleanup blocked")
+                return real_rmtree(path, *args, **kwargs)
+
+            with patch.object(cli.shutil, "rmtree", side_effect=fail_only_backup):
+                self.assertEqual(cli._publish(result, final, force=True), final)
+
+            self.assertEqual((final / "new.txt").read_bytes(), b"new")
+            backups = list(root.glob(".song-备份*"))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual((backups[0] / "old.txt").read_bytes(), b"old")
+
 
 class CommandLineTests(unittest.TestCase):
     def test_version_arguments_and_safe_titles(self):
@@ -173,22 +199,44 @@ class CommandLineTests(unittest.TestCase):
     def test_main_returns_documented_codes_and_chinese_messages(self):
         cli = load_cli()
         stdout = io.StringIO()
-        with patch.object(cli, "run_pipeline", side_effect=cli.HarmonicaError("可预期错误")):
+        with (
+            patch.object(cli.sys, "version_info", (3, 12, 0)),
+            patch.object(cli, "run_pipeline", side_effect=cli.HarmonicaError("可预期错误")),
+        ):
             with contextlib.redirect_stdout(stdout):
                 self.assertEqual(cli.main(["song.mp3"]), 2)
         self.assertIn("错误", stdout.getvalue())
 
         stdout = io.StringIO()
-        with patch.object(cli, "run_pipeline", side_effect=RuntimeError("boom")):
+        with (
+            patch.object(cli.sys, "version_info", (3, 12, 0)),
+            patch.object(cli, "run_pipeline", side_effect=RuntimeError("boom")),
+        ):
             with contextlib.redirect_stdout(stdout):
                 self.assertEqual(cli.main(["song.mp3"]), 1)
         self.assertIn("失败", stdout.getvalue())
 
         stdout = io.StringIO()
-        with patch.object(cli, "run_pipeline", return_value=Path("out/song")):
+        with (
+            patch.object(cli.sys, "version_info", (3, 12, 0)),
+            patch.object(cli, "run_pipeline", return_value=Path("out/song")),
+        ):
             with contextlib.redirect_stdout(stdout):
                 self.assertEqual(cli.main(["song.mp3"]), 0)
         self.assertIn("完成", stdout.getvalue())
+
+    def test_main_rejects_wrong_python_before_starting_pipeline(self):
+        cli = load_cli()
+        stdout = io.StringIO()
+        with (
+            patch.object(cli.sys, "version_info", (3, 11, 0)),
+            patch.object(cli, "run_pipeline") as pipeline,
+            contextlib.redirect_stdout(stdout),
+        ):
+            self.assertEqual(cli.main(["song.mp3"]), 2)
+
+        pipeline.assert_not_called()
+        self.assertIn("Python 3.12", stdout.getvalue())
 
 
 if __name__ == "__main__":
