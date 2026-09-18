@@ -13,7 +13,8 @@ import numpy as np
 import soundfile as sf
 
 from .instrument import KEYS, canonical_fingering, continuous_token
-from .models import HarmonicaError, QuantizedNote, TempoGrid
+from .exceptions import HarmonicaError
+from .models import QuantizedNote, TempoGrid
 
 NOTE_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
 

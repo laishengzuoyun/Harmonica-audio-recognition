@@ -10,7 +10,7 @@ from pathlib import Path
 import librosa
 import numpy as np
 
-from .models import InputValidationError
+from .exceptions import InputValidationError
 
 
 SUPPORTED_EXTENSIONS = {".mp3", ".wav", ".flac"}

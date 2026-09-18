@@ -2,25 +2,25 @@
 
 from dataclasses import dataclass
 
+from .exceptions import (
+    HarmonicaError,
+    InputValidationError,
+    InstrumentRangeError,
+    RhythmError,
+    TranscriptionError,
+)
 
-class HarmonicaError(RuntimeError):
-    """Base exception for harmonica transcription failures."""
-
-
-class InputValidationError(HarmonicaError):
-    """Raised when an input cannot be validated."""
-
-
-class TranscriptionError(HarmonicaError):
-    """Raised when audio transcription fails."""
-
-
-class RhythmError(HarmonicaError):
-    """Raised when rhythm analysis fails."""
-
-
-class InstrumentRangeError(HarmonicaError):
-    """Raised when a note is outside the instrument range."""
+__all__ = [
+    "HarmonicaError",
+    "InputValidationError",
+    "TranscriptionError",
+    "RhythmError",
+    "InstrumentRangeError",
+    "NoteEvent",
+    "TempoGrid",
+    "QuantizedNote",
+    "Fingering",
+]
 
 
 @dataclass(frozen=True)

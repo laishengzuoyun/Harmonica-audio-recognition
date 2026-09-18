@@ -5,7 +5,8 @@ from __future__ import annotations
 import librosa
 import numpy as np
 
-from .models import NoteEvent, QuantizedNote, RhythmError, TempoGrid
+from .exceptions import RhythmError
+from .models import NoteEvent, QuantizedNote, TempoGrid
 
 
 def _interval_grid(notes: list[NoteEvent]) -> TempoGrid:

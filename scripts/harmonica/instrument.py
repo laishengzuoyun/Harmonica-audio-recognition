@@ -5,7 +5,8 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Iterable
 
-from .models import Fingering, InstrumentRangeError, NoteEvent
+from .exceptions import InstrumentRangeError
+from .models import Fingering, NoteEvent
 
 KEYS = ("Z", "X", "C", "V", "B", "N", "M", ",")
 DEGREES = (1, 2, 3, 4, 5, 6, 7, 1)

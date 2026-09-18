@@ -6,7 +6,8 @@ from dataclasses import dataclass
 import librosa
 import numpy as np
 
-from .models import NoteEvent, TranscriptionError
+from .exceptions import TranscriptionError
+from .models import NoteEvent
 
 
 @dataclass(frozen=True)
