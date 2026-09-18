@@ -1,4 +1,5 @@
 import contextlib
+import hashlib
 import importlib.util
 import io
 import shutil
@@ -51,9 +52,20 @@ class PipelineTests(unittest.TestCase):
             accompaniment.write_bytes(b"music")
             rendered = {}
 
-            def fake_render(title, notes, grid, transpose, destination, sections, analysis):
+            def fake_render(
+                title,
+                notes,
+                grid,
+                transpose,
+                destination,
+                sections,
+                analysis,
+                *,
+                filesystem_title=None,
+            ):
                 rendered.update(
                     title=title,
+                    filesystem_title=filesystem_title,
                     notes=notes,
                     grid=grid,
                     transpose=transpose,
@@ -80,6 +92,125 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(rendered["sections"], [0])
             self.assertEqual(rendered["analysis"]["filtered_frame_count"], 1)
             self.assertEqual(rendered["analysis"]["filtered_note_count"], 0)
+            self.assertEqual(rendered["filesystem_title"], "歌曲")
+
+    def test_long_title_uses_bounded_unique_slug_but_keeps_display_title(self):
+        cli = load_cli()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            output = root / ("现实输出根-" + "o" * 25)
+            shared = "《超长歌曲》" + "A" * 100
+            display_title = shared + "甲"
+            other_title = shared + "乙"
+            source = root / f"{display_title}.mp3"
+            source.write_bytes(b"audio")
+            stems = root / "prepared-stems"
+            stems.mkdir()
+            vocals = stems / "vocals.wav"
+            accompaniment = stems / "no_vocals.wav"
+            vocals.write_bytes(b"vocal")
+            accompaniment.write_bytes(b"music")
+            rendered = {}
+
+            def fake_separate(actual_source, separation_root):
+                rendered["demucs_stem"] = (
+                    Path(separation_root)
+                    / "htdemucs"
+                    / actual_source.stem
+                    / "no_vocals.wav"
+                )
+                return vocals, accompaniment
+
+            def fake_render(
+                title,
+                notes,
+                grid,
+                transpose,
+                destination,
+                sections,
+                analysis,
+                *,
+                filesystem_title=None,
+            ):
+                destination = Path(destination)
+                rendered.update(
+                    title=title,
+                    filesystem_title=filesystem_title,
+                    staging_paths=[
+                        destination / f"{filesystem_title}{suffix}"
+                        for suffix in cli.RESULT_FILE_SUFFIXES
+                    ],
+                )
+                for path in rendered["staging_paths"]:
+                    path.write_text("ok", encoding="utf-8")
+
+            frames = SimpleNamespace(pitch=np.array([60.0, np.nan, 60.0]))
+            with (
+                patch.object(cli, "separate_audio", side_effect=fake_separate),
+                patch.object(cli, "load_mono", return_value=(np.zeros(32), 22_050)),
+                patch.object(cli, "transcribe_vocals", return_value=(valid_notes(), frames)),
+                patch.object(
+                    cli,
+                    "detect_tempo_grid",
+                    return_value=TempoGrid(120, 0, "beats", 1),
+                ),
+                patch.object(cli, "render_all", side_effect=fake_render),
+            ):
+                final = cli.run_pipeline(source, output)
+
+            slug = final.name
+            other_slug = cli._filesystem_title(other_title, output)
+            self.assertEqual(cli.safe_title(Path("《晴天》.mp3")), "《晴天》")
+            self.assertEqual(rendered["title"], display_title)
+            self.assertEqual(rendered["filesystem_title"], slug)
+            self.assertLess(len(slug), len(display_title))
+            expected_hash = hashlib.sha256(display_title.encode("utf-8")).hexdigest()[
+                :10
+            ]
+            self.assertTrue(slug.endswith("-" + expected_hash))
+            self.assertNotEqual(slug, other_slug)
+            self.assertEqual(slug, cli._filesystem_title(display_title, output))
+            self.assertLessEqual(cli._windows_path_length(final), cli.WINDOWS_SAFE_PATH_LIMIT)
+            for suffix in cli.RESULT_FILE_SUFFIXES:
+                published = final / f"{slug}{suffix}"
+                self.assertTrue(published.is_file())
+                self.assertLessEqual(
+                    cli._windows_path_length(published), cli.WINDOWS_SAFE_PATH_LIMIT
+                )
+            for staged in rendered["staging_paths"]:
+                self.assertLessEqual(
+                    cli._windows_path_length(staged), cli.WINDOWS_SAFE_PATH_LIMIT
+                )
+            self.assertIn(source.stem, rendered["demucs_stem"].parts)
+            self.assertLessEqual(
+                cli._windows_path_length(rendered["demucs_stem"]),
+                cli.WINDOWS_SAFE_PATH_LIMIT,
+            )
+
+            cli._save_failure(output, slug, None, RuntimeError("diagnostic"))
+            failures = list(output.glob(f"{slug}-失败-*"))
+            self.assertEqual(len(failures), 1)
+            self.assertLessEqual(
+                cli._windows_path_length(failures[0] / "错误日志.txt"),
+                cli.WINDOWS_SAFE_PATH_LIMIT,
+            )
+
+    def test_output_root_without_title_budget_is_rejected_before_separation(self):
+        cli = load_cli()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source = root / "song.mp3"
+            source.write_bytes(b"audio")
+            output = root / ("o" * 170)
+
+            with (
+                patch.object(cli, "validate_input"),
+                patch.object(cli, "separate_audio") as separate,
+                self.assertRaisesRegex(cli.InputValidationError, "路径.*过长|过长.*路径"),
+            ):
+                cli.run_pipeline(source, output)
+
+            separate.assert_not_called()
 
     def test_existing_output_without_force_is_rejected_without_changes(self):
         cli = load_cli()

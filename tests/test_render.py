@@ -61,6 +61,24 @@ class MarkdownRenderTests(unittest.TestCase):
                 self.assertIn("第 1 段", rendered)
                 self.assertIn("00:00.0", rendered)
 
+    def test_render_all_keeps_display_title_separate_from_filesystem_title(self):
+        with tempfile.TemporaryDirectory() as directory:
+            paths = render_all(
+                "《完整的超长展示标题》",
+                NOTES,
+                GRID,
+                0,
+                Path(directory),
+                [0],
+                filesystem_title="超长标题-a1b2c3d4e5",
+            )
+
+            self.assertTrue(
+                all(path.name.startswith("超长标题-a1b2c3d4e5-") for path in paths)
+            )
+            continuous = paths[0].read_text(encoding="utf-8")
+            self.assertTrue(continuous.startswith("# 《完整的超长展示标题》—连续按键谱"))
+
     def test_markdown_starts_each_requested_section_at_its_note(self):
         continuous = continuous_markdown("测试歌", NOTES, [0, 2])
         detailed = detailed_markdown("测试歌", NOTES, [0, 2])

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import shutil
 import sys
 import tempfile
@@ -17,6 +18,17 @@ from harmonica.exceptions import HarmonicaError, InputValidationError
 
 
 INVALID_TITLE_CHARACTERS = '<>:"/\\|?*'
+WINDOWS_SAFE_PATH_LIMIT = 240
+PATH_TOKEN_BUDGET = 12
+TITLE_HASH_LENGTH = 10
+RESULT_FILE_SUFFIXES = (
+    "-连续按键谱.md",
+    "-详细节奏谱.md",
+    "-音符明细.csv",
+    "-主旋律.mid",
+    "-口琴试听.wav",
+    "-分析报告.json",
+)
 WINDOWS_RESERVED_TITLES = {
     "CON",
     "PRN",
@@ -78,7 +90,7 @@ def _load_runtime_dependencies() -> None:
 
 
 def safe_title(path: Path) -> str:
-    """Return a deterministic Windows-safe score title from an audio filename."""
+    """Return the complete, Windows-safe display title from an audio filename."""
     title = Path(path).stem
     for character in INVALID_TITLE_CHARACTERS:
         title = title.replace(character, "_")
@@ -88,6 +100,77 @@ def safe_title(path: Path) -> str:
     if title.upper() in WINDOWS_RESERVED_TITLES:
         return f"_{title.upper()}"
     return title
+
+
+def _windows_path_length(path: Path) -> int:
+    """Count UTF-16 code units, matching how Windows measures native paths."""
+    absolute = str(Path(path).resolve(strict=False))
+    return len(absolute.encode("utf-16-le")) // 2
+
+
+def _title_paths(output_root: Path, title: str) -> list[Path]:
+    """Return the longest path shapes the CLI may create for *title*."""
+    output_root = Path(output_root).resolve(strict=False)
+    token = "x" * PATH_TOKEN_BUDGET
+    final = output_root / title
+    staging = output_root / f".处理中-{token}" / "result"
+    backup = output_root / f".{title}-备份-{token}"
+    failure = output_root / f"{title}-失败-20260918-235959-{token}"
+    paths = [final, staging, backup, failure]
+    for suffix in RESULT_FILE_SUFFIXES:
+        filename = f"{title}{suffix}"
+        paths.extend((final / filename, staging / filename, backup / filename))
+    paths.extend(
+        (
+            failure / "错误日志.txt",
+            failure / "stems" / "vocals.wav",
+            failure / "stems" / "no_vocals.wav",
+        )
+    )
+    return paths
+
+
+def _title_fits(output_root: Path, title: str) -> bool:
+    return all(
+        _windows_path_length(path) <= WINDOWS_SAFE_PATH_LIMIT
+        for path in _title_paths(output_root, title)
+    )
+
+
+def _filesystem_title(display_title: str, output_root: Path) -> str:
+    """Fit a stable score slug to every path shape used by the pipeline."""
+    if _title_fits(output_root, display_title):
+        return display_title
+
+    digest = hashlib.sha256(display_title.encode("utf-8")).hexdigest()[:TITLE_HASH_LENGTH]
+    suffix = f"-{digest}"
+    for prefix_length in range(len(display_title) - 1, 0, -1):
+        prefix = display_title[:prefix_length].rstrip(" .")
+        if not prefix:
+            continue
+        candidate = f"{prefix}{suffix}"
+        if _title_fits(output_root, candidate):
+            return candidate
+    raise InputValidationError(
+        f"输出路径过长，无法为歌曲名保留安全的文件名预算：{output_root}"
+    )
+
+
+def _validate_separation_path(source: Path, output_root: Path) -> None:
+    """Reject a Demucs stem path that cannot fit before starting Demucs."""
+    token = "x" * PATH_TOKEN_BUDGET
+    stem = (
+        Path(output_root).resolve(strict=False)
+        / f".处理中-{token}"
+        / "separation"
+        / "htdemucs"
+        / Path(source).stem
+        / "no_vocals.wav"
+    )
+    if _windows_path_length(stem) > WINDOWS_SAFE_PATH_LIMIT:
+        raise InputValidationError(
+            f"输出路径过长，Demucs 分轨文件将超出 Windows 安全限制：{output_root}"
+        )
 
 
 def validate_python_version(version: tuple[int, int] | None = None) -> None:
@@ -133,6 +216,8 @@ def _unused_sibling(parent: Path, prefix: str) -> Path:
         index += 1
     if not _is_inside(candidate, parent):
         raise InputValidationError(f"输出路径不安全：{candidate}")
+    if _windows_path_length(candidate) > WINDOWS_SAFE_PATH_LIMIT:
+        raise InputValidationError(f"输出路径过长：{candidate}")
     return candidate
 
 
@@ -180,8 +265,9 @@ def _save_failure(
         output_root = Path(output_root)
         output_root.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        failure = _unused_sibling(output_root, f"{title}-失败-{stamp}")
-        failure.mkdir()
+        failure = Path(
+            tempfile.mkdtemp(prefix=f"{title}-失败-{stamp}-", dir=output_root)
+        )
         (failure / "错误日志.txt").write_text(
             f"口琴谱提取失败。\n\n{type(error).__name__}: {error}\n",
             encoding="utf-8",
@@ -230,8 +316,10 @@ def run_pipeline(
     _load_runtime_dependencies()
     source = Path(audio)
     output_root = Path(output)
-    title = safe_title(source)
+    display_title = safe_title(source)
     validate_input(source, output_root)
+    title = _filesystem_title(display_title, output_root)
+    _validate_separation_path(source, output_root)
     final = output_root / title
     if final.exists() and not force:
         raise InputValidationError(f"输出目录已存在：{final}；如需覆盖请使用 --force。")
@@ -240,7 +328,7 @@ def run_pipeline(
     stems: tuple[Path, Path] | None = None
     try:
         work_root = Path(
-            tempfile.mkdtemp(prefix=f".{title}-处理中-", dir=output_root)
+            tempfile.mkdtemp(prefix=".处理中-", dir=output_root)
         )
         result = work_root / "result"
         result.mkdir()
@@ -267,7 +355,16 @@ def run_pipeline(
         sections = section_starts(quantized)
         analysis = _pitch_diagnostics(frames, len(notes), grid.source)
         print("6/6 生成乐谱文件…")
-        render_all(title, quantized, grid, transpose, result, sections, analysis)
+        render_all(
+            display_title,
+            quantized,
+            grid,
+            transpose,
+            result,
+            sections,
+            analysis,
+            filesystem_title=title,
+        )
         if keep_stems:
             stem_output = result / "stems"
             stem_output.mkdir()

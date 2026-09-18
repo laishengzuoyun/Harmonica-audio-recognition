@@ -278,6 +278,8 @@ def render_all(
     output: Path,
     sections: Sequence[int],
     analysis: Mapping[str, object] | None = None,
+    *,
+    filesystem_title: str | None = None,
 ) -> list[Path]:
     """Render markdown, CSV, MIDI, WAV, and JSON outputs for one melody."""
     notes = list(notes)
@@ -308,13 +310,14 @@ def render_all(
 
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
+    file_title = title if filesystem_title is None else filesystem_title
     paths = [
-        output / f"{title}-连续按键谱.md",
-        output / f"{title}-详细节奏谱.md",
-        output / f"{title}-音符明细.csv",
-        output / f"{title}-主旋律.mid",
-        output / f"{title}-口琴试听.wav",
-        output / f"{title}-分析报告.json",
+        output / f"{file_title}-连续按键谱.md",
+        output / f"{file_title}-详细节奏谱.md",
+        output / f"{file_title}-音符明细.csv",
+        output / f"{file_title}-主旋律.mid",
+        output / f"{file_title}-口琴试听.wav",
+        output / f"{file_title}-分析报告.json",
     ]
     paths[0].write_text(continuous_markdown(title, notes, sections), encoding="utf-8")
     paths[1].write_text(detailed_markdown(title, notes, sections), encoding="utf-8")
