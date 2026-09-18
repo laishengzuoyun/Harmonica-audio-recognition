@@ -106,8 +106,46 @@ def detect_tempo_grid(
                     "beats",
                     min(gap_consistency, fit_consistency),
                 )
+            if (
+                np.all(gaps > 0.0)
+                and np.isfinite(bpm)
+                and 45.0 <= bpm <= 210.0
+                and gap_consistency >= 0.60
+            ):
+                return TempoGrid(
+                    float(bpm),
+                    float(beat_times[0]),
+                    "beats-adaptive",
+                    gap_consistency,
+                    tuple(float(value) for value in beat_times),
+                )
 
     return _interval_grid(notes)
+
+
+def _grid_slots(times: list[float], grid: TempoGrid) -> list[int]:
+    """Map seconds to sixteenth-note slots on a fixed or observed beat grid."""
+    if not grid.beat_times:
+        slot_seconds = 60.0 / grid.bpm / 4.0
+        return [int(np.rint((value - grid.anchor) / slot_seconds)) for value in times]
+
+    beats = np.asarray(grid.beat_times, dtype=float)
+    if (
+        len(beats) < 2
+        or not np.all(np.isfinite(beats))
+        or not np.all(np.diff(beats) > 0)
+    ):
+        raise RhythmError("Adaptive beat times must be finite and strictly increasing.")
+
+    values = np.asarray(times, dtype=float)
+    beat_positions = np.interp(values, beats, np.arange(len(beats), dtype=float))
+    before = values < beats[0]
+    after = values > beats[-1]
+    beat_positions[before] = (values[before] - beats[0]) / (beats[1] - beats[0])
+    beat_positions[after] = (len(beats) - 1) + (
+        (values[after] - beats[-1]) / (beats[-1] - beats[-2])
+    )
+    return np.rint(beat_positions * 4.0).astype(int).tolist()
 
 
 def quantize_notes(
@@ -131,16 +169,11 @@ def quantize_notes(
             raise RhythmError("Notes must be in chronological order.")
         previous_start = note.start
 
-    slot_seconds = 60.0 / grid.bpm / 4.0
-    desired_starts = [
-        int(np.rint((note.start - grid.anchor) / slot_seconds)) for note in notes
-    ]
+    desired_starts = _grid_slots([note.start for note in notes], grid)
     starts = [desired_starts[0]]
     for desired_start in desired_starts[1:]:
         starts.append(max(desired_start, starts[-1] + 1))
-    desired_ends = [
-        int(np.rint((note.end - grid.anchor) / slot_seconds)) for note in notes
-    ]
+    desired_ends = _grid_slots([note.end for note in notes], grid)
     base_slot = (starts[0] // 16) * 16
     quantized: list[QuantizedNote] = []
 

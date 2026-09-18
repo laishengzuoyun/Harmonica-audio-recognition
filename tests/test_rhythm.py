@@ -48,6 +48,26 @@ class TempoGridTests(unittest.TestCase):
         positions = [(note.bar - 1) * 16 + note.slot for note in quantized]
         self.assertEqual(positions[1] - positions[0], 4 * 119)
 
+    def test_accepts_locally_consistent_beats_with_gradual_tempo_drift(self):
+        sample_rate = 22_050
+        hop_length = 512
+        drifting_bpms = np.linspace(159.8, 161.0, 589)
+        beat_times = np.concatenate(
+            ([0.67], 0.67 + np.cumsum(60.0 / drifting_bpms))
+        )
+        beat_frames = np.rint(beat_times * sample_rate / hop_length).astype(int)
+
+        with mock.patch(
+            "scripts.harmonica.rhythm.librosa.beat.beat_track",
+            return_value=(np.array([160.0]), beat_frames),
+        ):
+            grid = detect_tempo_grid(np.zeros(sample_rate), sample_rate, notes=[])
+
+        self.assertEqual(grid.source, "beats-adaptive")
+        self.assertGreaterEqual(grid.consistency, 0.95)
+        self.assertAlmostEqual(grid.bpm, 160.4, delta=1.0)
+        self.assertEqual(len(grid.beat_times), len(beat_times))
+
     def test_falls_back_to_note_intervals_when_accompaniment_has_no_beats(self):
         notes = [NoteEvent(i * 0.15, i * 0.15 + 0.1, 60, 0.9) for i in range(40)]
 
@@ -102,6 +122,32 @@ class QuantizationTests(unittest.TestCase):
         )
         self.assertEqual((quantized[1].bar, quantized[1].slot), (1, 3))
         self.assertEqual(quantized[1].play_midi, 62)
+
+    def test_quantizes_gradual_tempo_drift_against_observed_beats(self):
+        drifting_bpms = np.linspace(150.0, 165.0, 99)
+        beat_times = np.concatenate(
+            ([1.0], 1.0 + np.cumsum(60.0 / drifting_bpms))
+        )
+        beat_indexes = np.array([0, 25, 50, 75, 99])
+        notes = [
+            NoteEvent(float(beat_times[index]), float(beat_times[index] + 0.1), 60, 0.9)
+            for index in beat_indexes
+        ]
+        period, _ = np.polyfit(np.arange(len(beat_times)), beat_times, 1)
+        grid = TempoGrid(
+            60.0 / float(period),
+            float(beat_times[0]),
+            "beats-adaptive",
+            0.95,
+            tuple(float(value) for value in beat_times),
+        )
+
+        quantized = quantize_notes(notes, grid, 0)
+
+        positions = [
+            (note.bar - 1) * 16 + note.slot - 1 for note in quantized
+        ]
+        self.assertEqual(positions, (beat_indexes * 4).tolist())
 
     def test_rejects_empty_notes_or_invalid_tempo(self):
         with self.assertRaises(RhythmError):

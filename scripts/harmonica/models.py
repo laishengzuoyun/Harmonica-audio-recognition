@@ -42,6 +42,7 @@ class TempoGrid:
     anchor: float
     source: str
     consistency: float
+    beat_times: tuple[float, ...] = ()
 
 
 @dataclass(frozen=True)
